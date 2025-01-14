@@ -1,0 +1,6 @@
+*.macrocall
+.cache
+.cached
+.vscode
+target/
+build/
