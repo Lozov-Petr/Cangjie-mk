@@ -1,6 +1,7 @@
 package test
 
-import std.collection.{LinkedList
+import std.collection.{LinkedList, ArrayList
+
     // HashMap,
 }
 
@@ -56,6 +57,30 @@ public enum List<T> {
                 }
         }
     }
+
+    func map<U>(f: (T) -> U): List<U> {
+        match (this) {
+          case Nil => 
+            return Nil;
+          case Cons (h, tl) => 
+            return Cons(f(h), tl.map(f))            
+        }
+    }
+
+    func toArray<U>(f: (T) -> U): ArrayList<U> {
+      var arr = ArrayList<U>()
+      var self = this;
+      while (true) {
+        match (self) {
+          case Nil => 
+            return arr;
+          case Cons (h, tl) => 
+            arr.append(f(h))
+            break
+        }
+      }
+      return arr
+    }
 }
 
 public enum Term <: ToString {
@@ -65,8 +90,38 @@ public enum Term <: ToString {
     public func toString() {
         match (this) {
             case Var(i) => "_.${i}"
-            case Ctor(name, args) => "${name} (${List<Any>.toStringNoBrackets(args)})"
+            case Ctor(name, args) => 
+              if (name == "Cons") {
+                match (toStringList()) {
+                  case None => "${name} (${List<Any>.toStringNoBrackets(args)})"
+                  case Some(s) => s
+                }
+              } else {
+                "${name} (${List<Any>.toStringNoBrackets(args)})"
+              }              
         }
+    }
+
+    func toStringList(): Option<String> {
+      var acc = "[ "
+      var self = this;
+      var i=0;
+      while (true) {
+        match (self) {
+          case Ctor("Cons", List.Cons(head, Cons(tl, Nil))) =>
+            if (i!=0) { acc += "; " }
+            acc += head.toString()
+            self = tl
+            i++
+          case Ctor("Nil", List.Nil) =>
+            return Some(acc + "]")
+          case Var(_) =>
+            return Some(acc + "| " + self.toString() + " ]")
+          case _ =>
+            return None
+        }
+      }
+      return Some(acc)
     }
 }
 
@@ -75,6 +130,9 @@ type Substitution = List<(VarIndex, Term)>
 extend Substitution {
     func ToString() {
         List.toString<VarIndex, Term>(this)
+    }
+    func reify(t: Term): Term {
+      return Subst.walk(t, this)
     }
 }
 
@@ -87,12 +145,13 @@ public class Subst {
         Cons((varIndex, term), subst)
     }
 
-    private static func walk(term: Term, subst: Substitution): Term {
+    public static func walk(term: Term, subst: Substitution): Term {
+        //println("walking ${term} in subst = ${subst.ToString()}")
         match (term) {
-            case Ctor(_, _) => term
+            case Ctor(name, xs) => Ctor(name, xs.map { x => walk(x, subst)})
             case Var(v) => match (List<Any>.find<VarIndex, Term>(subst, v)) {
                 case None => term
-                case Some(t) => t
+                case Some(t) => walk(t, subst)
             }
         }
     }
@@ -292,6 +351,18 @@ enum Stream {
     }
 }
 
+func run1(n: Int , rel: (Term) -> Goal) : ArrayList<Term> {
+  let s = Subst.empty()
+  let q = Var(0)
+  let answers: List<Substitution> = rel(q).g((s,1)).takeList(n)
+  return answers.toArray<Term>({ s: Substitution => 
+    println("s = ${s.ToString()}")
+    let ans = s.reify(q) 
+    println("q = $ans")
+    ans 
+    })
+}
+
 class Goal {
     var g: (State) -> Stream
     Goal(goal: (State) -> Stream) {
@@ -335,8 +406,9 @@ func appendo(x: Term, y: Term, xy: Term): Goal {
                     {
                         xs: Term => Stream.callFresh(
                             {
-                                xys: Term => Stream.unify(x, StdTerms.Cons(hd, xs)) &  Stream.unify(xy,
-                                    StdTerms.Cons(hd, xys)) //& Stream.delay{ =>  appendo(xs, y, xys) }
+                                xys: Term => Stream.unify(x, StdTerms.Cons(hd, xs)) &  
+                                  Stream.unify(xy, StdTerms.Cons(hd, xys)) & 
+                                  Stream.delay{ =>  appendo(xs, y, xys) }
                             })
                     })
             })
@@ -362,6 +434,26 @@ func ctor(name: String, args: Array<Term>): Term {
         acc = List.Cons(args[i], acc)
     }
     return Ctor(name, acc)
+}
+
+func test1(n: Int, query: (Term) -> Goal) {    
+    let results = run1(n, query)
+
+    for (result in results) {
+        println(result.toString())
+    }
+}
+
+func test2(n: Int, query: (Term, Term) -> Goal) {    
+  let s = Subst.empty()
+  let q1 = Var(0)
+  let q2 = Var(1)
+  let answers: ArrayList<(Term,Term)> = query(q1, q2).g((s,2)).takeList(n)
+    .toArray<(Term,Term)> { s:Substitution => (s.reify(q1), s.reify(q2)) }
+  for ((r1,r2) in answers) {
+    println("q = ${r1}")
+    println("r = ${r2}")
+  }
 }
 
 main(): Int64 {
@@ -401,21 +493,22 @@ main(): Int64 {
         println(result.ToString())
     }
 
-    let query2 = Stream.callFresh( {
-      q => appendo(
-        ctor("Cons", ctor("1"), ctor("nil")),
+    test1(1, {
+      q: Term => appendo(
+        ctor("Cons", ctor("A"), ctor("Nil")),
         //ctor("Nil"),
-        ctor("Cons", ctor("2"), ctor("nil")),
+        ctor("Cons", ctor("B"), ctor("Nil")),
         //ctor("Nil"),
         q)
     })
 
-    let results2 = Stream.run(1, query2)
-
-    for (result in results2) {
-        println(result.ToString())
-    }
-
+    println("Running backwards")
+    test2(2, {
+      q, r => appendo(
+        q, 
+        r, 
+        ctor("Cons", ctor("A"), ctor("Cons", ctor("C"), ctor("Nil"))))
+    }) 
     println("FIN")
     return 0
 }
