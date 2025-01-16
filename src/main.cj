@@ -76,7 +76,7 @@ public enum List<T> {
             return arr;
           case Cons (h, tl) => 
             arr.append(f(h))
-            break
+            self = tl
         }
       }
       return arr
